@@ -34,6 +34,13 @@
     - [GraphQLタイプ名](#graphqlタイプ名)
     - [GraphQLの説明](#graphqlの説明)
     - [インターフェイスと可能な型](#インターフェイスと可能な型)
+  - [列挙型](#列挙型)
+    - [定義](#定義)
+    - [値の説明](#値の説明)
+    - [PythonのEnumと使用する](#pythonのenumと使用する)
+    - [注意事項](#注意事項)
+  - [インターフェイス](#インターフェイス)
+    - [データオブジェクトを型へ解決する](#データオブジェクトを型へ解決する)
 
 ## スキーマ
 
@@ -920,4 +927,253 @@ class MyGraphQlSong(ObjectType):
     class Meta:
         interfaces = (Node,)
         possible_types = (Song,)
+```
+
+## 列挙型
+
+`Enum`は、一意な定数値に束縛する象徴的な名前（メンバー）の集合を表現する、特別なGraphQLの型です。
+
+### 定義
+
+クラスを使用することで`Enum`を作成できます。
+
+```python
+import graphene
+
+
+class Episode(graphene.Enum):
+    NEWHOPE = 4
+    EMPIRE = 5
+    JEDI = 6
+```
+
+`Enum`のインスタンスを使用して作成することもできます。
+
+```python
+import graphene
+
+Episode = graphene.Enum("Episode", [("NEWHOPE", 4), ("EMPIRE", 5), ("JEDI", 6)])
+```
+
+### 値の説明
+
+`Enum`の値に説明を追加でき、`Enum`の値は`description`プロパティを持つ必要があります。
+
+```python
+class Episode(graphene.Enum):
+    NEWHOPE = 4
+    EMPIRE = 5
+    JEDI = 6
+
+    @property
+    def description(self):
+        if self == Episode.NEWHOPE:
+            return "New Hope Episode"
+        return "Other Episode"
+```
+
+### PythonのEnumと使用する
+
+`Enum`がすでに定義されている場合、`Enum.from_enum`関数を使用してそれらを再利用できます。
+
+```python
+graphene.Enum.from_enum(AlreadyExistingPyEnum)
+```
+
+`Enum.from_enum`は、オリジナルを変更することなしで、説明などを`Enum`に追加するために、入力として`description`と`description_reason`ラムダをサポートしています。
+
+```python
+graphene.Enum.from_enum(
+    AlreadyExistingPyEnum,
+    description=lambda v: return "foo" if v == AlreadyExistingPyEnum.Foo else "bar"
+)
+```
+
+### 注意事項
+
+`graphene.Enum`は、内部で`enum.Enum`を使用しており（またそれが利用できない場合はバックポート）、メンバーのゲッターを除いて同様な方法で使用できます。
+
+> バックポートとは、新しいバージョンのソフトウェアの機能を、古いバージョンのソフトウェアに移植すること。
+
+Pythonの`Enum`の実装において、`Enum`を初期化することでメンバーにアクセスできます。
+
+```python
+from enum import Enum
+
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+
+assert Color(1) == Color.RAD
+```
+
+しかし、Grapheneの`Enum`において、ある効果を得るために`.get`を呼び出す必要があります。
+
+```python
+from graphene import Enum
+
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+
+assert Color.get(1) == Color.RED
+```
+
+## インターフェイス
+
+`Interface`は、インターフェイスを実装するために型が含まなければならない特定のフィールドの集合を定義する抽象的な型です。
+
+例えば、スターウォーズ3部作の任意のキャラクターを表現する`Character`インターフェイスを定義できます。
+
+```python
+import graphene
+
+
+class Character(graphene.Interface):
+    id = graphene.ID(required=True)
+    name = graphene.String(required=True)
+    friends = graphene.List(lambda: Character)
+```
+
+`Character`を実装する任意の`ObjectType`は、これらの引数と戻り値の型を持つ、これらの正確なフィールドがあります。
+
+例えば、ここに`Character`を実装するいくつかの型を示します。
+
+```python
+class Human(graphene.ObjectType):
+    class Meta:
+        interfaces = (Character,)
+
+    starships = graphene.List(Starship)
+    home_planet = graphene.String()
+
+
+class Droid(graphene.ObjectType):
+    class Meta:
+        interfaces = (Character,)
+
+    primary_function = graphene.String()
+```
+
+これらの型の両方は、`Character`インターフェイスのフィールドのすべてを持ちますが、その特定の型の`Character`に固有の追加フィールドである`home_planet`、`starships`と`primary_function`を持ちます。
+
+その完全なGraphQLスキーマの定義は次のようになります。
+
+```graphql
+interface Character {
+  id: ID!
+  name: String!
+  friends: [Character]
+}
+
+type Human implements Character {
+  id: ID!
+  name: String!
+  friends: [Character]
+  starships: [Starships]
+  homePlanet: String
+}
+
+type Droid implements Character {
+  id: ID!
+  name: String!
+  friends: [Character]
+  primaryFunction: String
+}
+```
+
+いくつかの異なる型のオブジェクトまたはオブジェクトの集合を返したいとき、`Interface`は便利です。
+
+例えば、そのエピソードに応じて任意の`Character`に解決する`hero`フィールドを定義できます。
+
+```python
+class Query(graphene.ObjectType):
+    hero = graphene.Field(Character, required=True, episode=graphene.Int(required=True))
+
+    @staticmethod
+    def resolve_hero(parent, info, episode):
+        # ルークはエピソード5のヒーローです。
+        if episode == 5:
+            return get_human(name="Luke Skywalker")
+        return get_droid(name="R2-D2")
+
+
+schema = graphene.Schema(query=Query)
+```
+
+これは、`Character`インターフェイスに存在するフィールドを直接クエリしたり、[インラインフラグメント](https://graphql.org/learn/queries/#inline-fragments)を使用してインターフェイスを實相する任意の型の特定のフィールドを選択することができます。
+
+例えば、次のクエリは・・・
+
+```graphql
+query HeroForEpisode($episode: Int!) {
+  hero(episode: $episode) {
+    __typename
+    name
+    ... on Droid {
+      primaryFunction
+    }
+    ... on Human {
+      homePlanet
+    }
+  }
+}
+```
+
+`{"episode": 4}`で次のデータを返します。
+
+```json
+{
+  "data": {
+    "hero": {
+      "__typename": "Droid",
+      "name": "R2-D2",
+      "primaryFunction": "Astromech"
+    }
+  }
+}
+```
+
+そして、`{"episode": 5}`で異なるデータを返します。
+
+```json
+{
+  "data": {
+    "hero": {
+      "__typename": "Human",
+      "name": "Luke Skywalker",
+      "homePlanet": "Tatooine"
+    }
+  }
+}
+```
+
+### データオブジェクトを型へ解決する
+
+Grapheneでスキーマを構築すると、リゾルバーは、Grapheneの型のインスタンスではなく、DjangoまたはSQLAlchemyモデルのような、GraphQLの型を裏付けるデータを表すオブジェクトを返すことが一般的です。
+これは、`ObjectType`と`Scalar`フィールドでも機能しますが、インターフェイスを使用し始めたとき、次のエラーに出会うかもしれません。
+
+```text
+"Abstract Type Character must resolve to an Object type at runtime for field Query.hero ..."
+```
+
+Grapheneは、`Interface`を解決するために必要なデータオブジェクトをGrapheneの型に変換する十分な情報を持っていないことが理由で発生します。
+これを解決するために、データオブジェクトとGrapheneの型をマップする`resolve_type`クラスメソッドを`Interface`に定義できます。
+
+```python
+class Character(graphene.Interface):
+    id = graphene.ID(required=True)
+    name = graphene.String(required=True)
+
+    @classmethod
+    def resolve_type(cls, instance, info):
+        if instance.type == "DROID":
+            return Droid
+        return Human
 ```
