@@ -133,3 +133,61 @@ query_string = """
 result = schema.execute(query_string,operation_name="getUserWithFullName")
 assert result.data["user"]["fullName"]
 ```
+
+## ミドルウェア
+
+スキーマのフィールドの評価に影響を与えるために`middleware`を使用できます。
+
+ミドルウェアは、`resolve(next_middleware, *args)`に反応する任意のオブジェクトまたは関数です。
+
+メソッドの内部で、ミドルウェアは次のどちらかを実行します。
+
+- 評価を続けるために次のミドルウェアに`resolve`を送信するか・・・
+- 早期に評価を終了するために値を返します。
+
+### 引数を解決する
+
+ミドルウェアの`resolve`は、いくつかの引数で呼び出されます。
+
+- `next`は実行チェインを表現します。評価を続けるために`next`を呼び出します。
+- `root`はクエリを通じて渡されるルート値オブジェクトです。
+- `info`はリゾルバーの情報です。
+- `args`はフィールドに渡される引数の辞書です。
+
+### 例
+
+このミドルウェアは、もし`field_name`が`user`でない場合、単に評価を継続します。
+
+```python
+class AuthorizationMiddleware(object):
+    def resolve(self, next, parent, info, **args):
+        if info.field_name == "user:
+            return None
+        return next(parent, info, **args)
+```
+
+そして次にそれを実行します。
+
+```python
+result = schema.execute("THE QUERY", middleware=[AuthorizationMiddleware()])
+```
+
+もし、`middleware`引数が複数のミドルウェアを含む場合、それらのミドルウェアは、例えば最後から最初までなど、下から上に実行されます。
+
+### 関数の例
+
+またミドルウェアは、関数としても定義できます。
+ここに、それぞれのフィールドを解決するためにかかった時間をログに記録するミドルウェアを定義します。
+
+```python
+from time import time as timer
+
+
+def timing_middleware(next, parent, info, **args):
+    start = timer()
+    return_value = next(parent, inf, **args)
+    duration = round((timer() - start) * 1000, 2)
+    parent_type_name = parent._meta.name if root and hasattr(parent, "_meta") else ""
+    logger.debug(f"{parent_type_name}.{info.field_name}: {duration} ms")
+    return return_value
+```
