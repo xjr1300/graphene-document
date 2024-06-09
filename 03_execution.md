@@ -288,3 +288,239 @@ class User(graphene.ObjectType):
     async def resolve_friends(parent, info):
         return await user_loader.load_many(root.friend_ids)
 ```
+
+## ファイルのアップロード
+
+ファイルのアップロードは、まだ公式のGraphQLの仕様の一部となっておらず、Grapheneで実装されていません。
+
+もし、サーバーがファイルのアップロードをサポートする必要がある場合、ファイルのアップロードを追加することでGrapheneを強化する[Graphene-file-upload](https://github.com/lmcgartland/graphene-file-upload)、非公式GraphQLの[マルチパートリクエスト仕様](https://github.com/jaydenseric/graphql-multipart-request-spec)に準拠するライブラリを使用できます。
+
+## サブスクリプション
+
+サブスクリプションを作成するために、スキーマの`subscribe`メソッドを直接呼び出してください。
+このメソッドは非同期で待機しなければなりません(`must be awaited`)。
+
+```python
+import asyncio
+from datetime import datetime
+from graphene import ObjectType, String, Schema, Field
+
+
+# すべてのスキーマはクエリを要求します。
+class Query(ObjectType):
+    hello = String()
+
+    def resolve_hello(parent, info):
+        return "Hello, world!"
+
+
+class Subscription(ObjectType):
+    time_of_day = String()
+
+    @staticmethod
+    async def subscribe_time_of_day(parent, info):
+        while True:
+            yield datetime.now().isoformat()
+            await asyncio.sleep(1)
+
+
+schema = Schema(query=Query, subscription= Subscription)
+
+
+async def main(schema):
+    subscription = "subscription { timeOfDay }"
+    result = await schema.subscription(subscription)
+    async for item in result:
+        print(item.data["timeOfDay"])
+
+
+asyncio.run(main(schema))
+```
+
+`result`は、クエリと同じ方法でアイテムを生み出す非同期イテレーターです。
+
+## クエリの検証
+
+GraphQLは、クエリのASTが妥当で実行可能か検証するために、クエリバリデーターを使用します。
+すべてのGraphQLサーバーは、標準のクエリバリデーターを実装しています。
+例えば、クエリしたフィールドがクエリした方に存在するか確認するバリデーターがあり、もしそれが存在しない場合、それは「Cannot query field on type」エラーでクエリを失敗させます。
+
+一般的なユースケースを支援するために、Grapheneは標準でいくつかの検証ルールを提供しています。
+
+### 深さ制限バリデーター
+
+深さ制限バリデーターは、悪意のあるクエリの実行を防ぐために役立ちます。
+それは次の引数を受け取ります。
+
+- `max_depth`は　GraphQLドキュメント内の操作に許可される最大の深さです。
+- `ignore`は、フィールド名に基づく再帰的な深さ確認を停止します。文字列または正規表現にマッチする名前、またはブール値を返す関数です。
+- `callback`は、バリデーションが動作するたびに呼び出されます。それぞれの操作の深さのマップを持つオブジェクトを受け取ります。
+
+#### 使用方法
+
+スキーマに深さ制限を實相する方法をここに示します。
+
+```python
+from graphql import validate, parse
+from graphene import ObjectType, Schema, String
+from graphene.validation import depth_limit_validator
+
+
+class MyQuery(ObjectType):
+    name = String()
+
+
+schema = Schema(query=MyQuery)
+
+
+# 20以上の深さを持つクエリを実行させない。
+validation_errors = validate(
+    schema=schema.graphql_schema,
+    document_ast=parse("THE QUERY"),
+    rules=(
+        depth_limit_validator(max_depth=20)
+    )
+)
+```
+
+### イントロスペクションの無効化
+
+イントロスペクション無効化検証ルールは、スキーマがイントロスペクションされないように保証します。
+
+> イントロスペクション(introspection): 内観、反省、自らを振り返る（自己反省）、ITでは自分自身の構造を調べて、さらに変更すること
+
+これは、プロダクション環境でセキュリティの測定に役立ちます。
+
+#### 使用方法
+
+スキーマのイントロスペクションを無効化する方法をここに示します。
+
+```python
+from graphql import validate, parse
+from graphene import ObjectType, Schema, String
+from graphene.validation import DisableIntrospection
+
+
+class MyQuery(ObjectType):
+    name = String()
+
+
+schema = Schema(query=MyQuery)
+
+
+# イントロスペクションクエリを実行しない
+validation_errors = validate(
+    schema=schema.graphql_schema,
+    document_ast=parse("THE QUERY"),
+    rules=(
+        DisableIntrospection()
+    )
+)
+```
+
+### 独自のバリデーターの実装
+
+すべての独自なクエリバリデーターは、`graphql.validation.rules`モジュールからインポートできる[ValidationRule](https://github.com/graphql-python/graphql-core/blob/v3.0.5/src/graphql/validation/rules/__init__.py#L37)基本クラスを拡張しなければなりません。
+クエリバリデーターはビジタークラスです。
+それらは、クエリを検証するとき、`ASTValidationContext`の1つの必須な引数を使用してインスタンス化されます。
+検証を実行するために、バリデータークラスは1つ以上の`enter_*`と`leave_*`メソッドを実装しなければなりません。
+可能な`enter/leave`アイテムと関数の詳細のドキュメントは、訪問者モジュールのコンテンツを参照してください。
+検証を失敗させるために、失敗した理由を説明した`GraphQLError`インスタンスで`report_error`メソッドを呼び出さなくてはなりません。
+GraphQLクエリのフィールド定義を訪問するクエリバリデーターと、それらのフィールドがブラックリストにある場合にクエリの検証を失敗させる例をここに示します。
+
+```python
+from graphql import GraphQLError
+from graphql.language import FieldNode
+from graphql.validation import ValidationRule
+
+
+my_blacklist = ("disallowed_field",)
+
+
+def is_blacklisted_field(field_name: str):
+    return field_name.lower() in my_blacklist
+
+
+class BlacklistRule(ValidationRule):
+    def enter_field(self, node: FieldNode, *_args):
+        field_name = node.name.value
+        if not is_blacklisted_field(field_name):
+            return
+        self.report_error(
+            GraphQLError(
+                f"Cannot query '{field_name}': field is blacklisted", node
+            )
+        )
+```
+
+#### ビジタークラス（Visitorパターン）
+
+ビジターパターンは、オブジェクトの構造とアルゴリズムを分離するためのデザインパターンであｒ．
+このパターンでは、操作をオブジェクトの構造から分離し、操作を別の訪問者クラス（`Visitor`）に定義します。
+これにより、オブジェクトの構造を変更せずに新しい操作を追加することができます。
+
+次は、Pythonでビジターパターンを実装した例である。
+この例では、図形（`Circle`と`Rectangle`）のリストに対して、面積を計算する訪問者（`AreaVisitor`）を使用している。
+
+```python
+from abc import ABC, abstractmethod
+import math
+
+# Shapeインターフェース（abc.ABCを継承した抽象基本クラス）
+class Shape(ABC):
+    @abstractmethod
+    def accept(self, visitor):
+        pass
+
+
+# ConcreteShapeクラス
+class Circle(Shape):
+    def __init__(self, radius):
+        self.radius = radius
+
+    def accept(self, visitor):
+        """訪問者を受け入れる"""
+        visitor.visit_circle(self)
+
+
+# ConcreteShapeクラス
+class Rectangle(Shape):
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+
+    def accept(self, visitor):
+        """訪問者を受け入れる"""
+        visitor.visit_rectangle(self)
+
+
+# Visitorインターフェース
+class Visitor(ABC):
+    @abstractmethod
+    def visit_circle(self, circle):
+        pass
+
+    @abstractmethod
+    def visit_rectangle(self, rectangle):
+        pass
+
+
+# ConcreteVisitorクラス
+class AreaVisitor(Visitor):
+    def visit_circle(self, circle):
+        area = math.pi * (circle.radius ** 2)
+        print(f'Circle area: {area}')
+
+    def visit_rectangle(self, rectangle):
+        area = rectangle.width * rectangle.height
+        print(f'Rectangle area: {area}')
+
+
+shapes = [
+    Circle(5),
+    Rectangle(3, 4)
+]
+visitor = AreaVisitor()
+for shape in shapes:
+    shape.accept(visitor)
+```
