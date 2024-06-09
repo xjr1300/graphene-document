@@ -43,6 +43,11 @@
     - [データオブジェクトを型へ解決する](#データオブジェクトを型へ解決する)
   - [ユニオン](#ユニオン)
     - [簡単な例](#簡単な例-1)
+  - [ミューテーション](#ミューテーション)
+    - [簡単な例](#簡単な例-2)
+    - [ミューテーションの実行](#ミューテーションの実行)
+    - [InputFieldとInputObjectType](#inputfieldとinputobjecttype)
+    - [出力型の例](#出力型の例)
 
 ## スキーマ
 
@@ -1241,4 +1246,190 @@ type Starship {
 }
 
 union SearchResult = Human | Droid | Starship
+```
+
+## ミューテーション
+
+ミューテーションは、入力も定義する特別な`ObjectType`です。
+
+### 簡単な例
+
+この例はミューテーションを定義しています。
+
+```python
+import graphene
+
+
+class CreatePerson(graphene.Mutation):
+    class Arguments:
+        name = graphene.String()
+
+    ok = graphene.Boolean()
+    person = graphene.Field(lambda: Person)
+
+    @staticmethod
+    def mutate(root, info, name):
+        person = Person(name=name)
+        ok = True
+        return CreatePerson(person=person, ok=ok)
+```
+
+`person`と`ok`は、ミューテーションが解決されたとき、ミューテーションの出力フィールドです。
+
+`Arguments`属性は、`CreatePerson`ミューテーションが解決するために必要とする引数で、この場合`name`はミューテーションの唯一の引数です。
+
+`mutate`は、ミューテーションが呼び出されたときに適用される関数です。
+`mutate`メソッドは、内部でデータを変更できる単なる特別なリゾルバーです。
+`mutate`メソッドは、標準的なクエリの[リゾルバーパラメーター](https://docs.graphene-python.org/en/latest/types/objecttypes/#resolverarguments)として、いくつかの引数を受け取ります。
+
+よって、次のようにスキーマを仕上げるできます。
+
+```python
+class CreatePerson(graphene.Mutation):
+    [...snip...]
+
+
+class Person(graphene.ObjectType):
+    name = graphene.String()
+    age = graphene.Int()
+
+
+class MyMutations(graphene.ObjectType):
+    create_person = CreatePerson.Field()
+
+
+# スキーマにクエリを定義しなければなりません。
+class Query(graphene.ObjectType):
+    person = graphene.Field(Person)
+
+
+schema = graphene.Schema(query=Query, mutation=MyMutations)
+```
+
+### ミューテーションの実行
+
+次に、`schema.execute(query_str)`で次をクエリします。
+
+```graphql
+mutation myFirstMutation {
+  createPerson(name: "Peter") {
+    person {
+      name
+    }
+    ok
+  }
+}
+```
+
+次を受け取るはずです。
+
+```json
+{
+  "createPerson": {
+    "person": {
+      "name": "Peter"
+    },
+    "ok": true
+  }
+}
+```
+
+### InputFieldとInputObjectType
+
+`InputField`は、ミューテーション用のネストした入力データを許可するために、ミューテーション内で使用されます。
+
+`InputField`を使用するために、入力データの構造を示す`InputObjectType`を定義します。
+
+```python
+import graphene
+
+
+class PersonInput(graphene.InputObjectType):
+    name = graphene.String(required=True)
+    age = graphene.Int(required=True)
+
+
+class CreatePerson(graphene.Mutation):
+    class Arguments:
+        person_data = PersonINput(required=True)
+
+    person = graphene.Field(Person)
+
+    @staticmethod
+    def mutate(root, info, person_data=None):
+        person = Person(name=person_data.name, age=person_data.age)
+        return CreatePerson(person=person)
+```
+
+`name`と`age`は、`person_data`の一部であることに注意してください。
+
+上記のミューテーションを使用する新しいクエリは次のとおりです。
+
+```graphql
+mutation myFirstMutation {
+  createPerson(personData: {name: "Peter", age: 24}) {
+    person {
+      name
+      age
+    }
+  }
+}
+```
+
+`InputObjectType`は、必要に応じて複雑な入力データを利用するために`InputObjectType`のフィールドにもなれます。
+
+```python
+import graphene
+
+
+class LatLngInput(graphene.InputObjectType):
+    lat = graphene.Float()
+    lng = graphene.Float()
+
+
+# 位置はそれに関連した緯度と経度を持ちます。
+class LocationINput(graphene.InputObjectType):
+    name = graphene.String()
+    latlng = LatLngInput()
+```
+
+### 出力型の例
+
+ミューテーションの特別な型の代わりに存在する`ObjectType`を返すために、期待される`ObjectType`を`Output`属性に設定してください。
+
+```python
+import graphene
+
+
+class CreatePerson(graphene.Mutation):
+    class Arguments:
+        name = graphene.String()
+
+    Output = Person
+
+    @staticmethod
+    def mutate(root, info, name):
+        return Person(name=name)
+```
+
+そして、`schema.execute(query_str)`で次をクエリします。
+
+```graphql
+mutation myFirstMutation {
+  createPerson(name: "Peter") {
+    name
+    __typename
+  }
+}
+```
+
+次を受け取るはずです。
+
+```json
+{
+  "createPerson": {
+    "name": "Peter",
+    "__typename": "Person"
+  }
+}
 ```
