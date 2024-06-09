@@ -41,6 +41,8 @@
     - [注意事項](#注意事項)
   - [インターフェイス](#インターフェイス)
     - [データオブジェクトを型へ解決する](#データオブジェクトを型へ解決する)
+  - [ユニオン](#ユニオン)
+    - [簡単な例](#簡単な例-1)
 
 ## スキーマ
 
@@ -1176,4 +1178,67 @@ class Character(graphene.Interface):
         if instance.type == "DROID":
             return Droid
         return Human
+```
+
+## ユニオン
+
+ユニオン型はインターフェイスととても似ていますが、それらは型の間で任意の共通なフィールドを指定できません。
+
+基本は次のとおりです。
+
+- それそれのユニオンは、`graphene.Union`から派生したPythonのクラスです。
+- ユニオンは任意のフィールドを持たず、単に可能性のある`ObjectType`へのリンクです。
+
+### 簡単な例
+
+このモデルの例は、`独自のフィールドを持ついくつかの`ObjectType`を定義しています。
+`SearchResult`は、この`ObjectType`の`Union`の実装です。
+
+```python
+import graphene
+
+
+class Human(graphene.ObjectType):
+    name = graphene.String()
+    born_in = graphene.String()
+
+
+class Droid(graphene.ObjectType):
+    name = graphene.String()
+    primary_function = graphene.String()
+
+
+class Starship(graphene.ObjectType):
+    name = graphene.String()
+    length = graphene.Int()
+
+
+class SearchResult(graphene.Union):
+    class Meta:
+        types = (Human, Droid, Starship)
+```
+
+スキーマの`SearchResult`型を返す場合、`Human`、`Droid`または`Starship`を取得する可能性があります。
+ユニオン型のメンバーは、具体的なオブジェクトの型でなければならないことに注意してください。
+インターフェイスまたは他のユニオン型から、ユニオン型を作成することはできません。
+
+上記の型は、スキーマ内で次の表現を持ちます。
+
+```graphql
+type Droid {
+  name: String
+  primaryFunction: String
+}
+
+type Human {
+  name: String
+  bornIn: String
+}
+
+type Starship {
+  name: String
+  length: Int
+}
+
+union SearchResult = Human | Droid | Starship
 ```
